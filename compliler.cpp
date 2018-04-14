@@ -44,10 +44,12 @@ op_code_t jne_short = 0x75;
 op_code_t jge_short = 0x7D;
 op_code_t jle_short = 0x7E;
 op_code_t call_reg  = 0xFF;
+op_code_t inc_reg   = 0xFF;
 
 // registers
 inf_code_t r8  = 0;
 inf_code_t eax = 0; 
+inf_code_t r9  = 1;
 inf_code_t ecx = 1;
 inf_code_t edx = 2;
 inf_code_t ebx = 3;
@@ -136,14 +138,14 @@ struct checker_t compileJIT(struct function_t function) {
             pr.add(je_short, 6, nop);
             pr.ret_false();        
         } else if (op_code == E_NAME) {
-            pr.add(get_rex(true, false, false, true), mov_rr, reg_reg(reg_naked, edi, r8), nop);
+            pr.add(get_rex(true, false, false, true), mov_rr, reg_reg(reg_naked, edi, r9), nop);
             for (size_t i = 0; string[i]; i++) {
                 pr.add(
-                    0x41, 0x80, 0x38, string[i], nop,    // cmp [r8], string[i]
+                    get_rex(false, false, false, true), 0x80, 0x39, string[i], nop,    // cmp [r9], string[i]
                     je_short, 6, nop
                 );
                 pr.ret_false(); pr.add(nop);
-                pr.add(get_rex(true, false, false, true), 0xFF, 0xC0, nop); // inc r8
+                pr.add(get_rex(true, false, false, true), inc_reg, reg_reg(reg_naked, 0, r9), nop);
             }
         } else if (op_code == EXEC) {
             pr.add(push_reg(esi), nop);
@@ -157,6 +159,6 @@ struct checker_t compileJIT(struct function_t function) {
     pr.add(get_rex(), _xor, reg_reg(reg_naked, eax, eax), nop);
     pr.add(get_rex(), _not, 0xD0 | eax, nop);
     pr.add(ret_0, nop);
-    pr.print();
+    // pr.print();
     return pr.get_code();
 }
