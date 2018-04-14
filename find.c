@@ -1,19 +1,7 @@
-#define _GNU_SOURCE
-#include <fcntl.h>
-#include <stdio.h>
-#include <error.h>
-#include <dirent.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <sys/types.h>
-#include <sys/syscall.h>
+#include "header.h"
 
-typedef ssize_t bool;
-const bool true = -1;
-const bool false = 0;
+const boolean true = -1;
+const boolean false = 0;
 char* const* envp;
 
 void critical(const char* message) {
@@ -35,7 +23,7 @@ if (                                        \
 	fflush(stdout);                         \
 } 
 
-void launch(char* const executee, const char* path, char* const file) {
+void launch(char* const file, char* const executee) {
 	
 	const pid_t pid = fork();
 	if (pid == -1) {
@@ -46,18 +34,10 @@ void launch(char* const executee, const char* path, char* const file) {
 	if (!pid) { 
 		// child
 
-		char* arg = malloc((strlen(path) + strlen(file) + 2) * sizeof(char));
-		if (arg == 0) {
-			critical("Out of memory");
-		}
-		strcpy(arg, path);
-		strcat(arg, "/");
-		strcat(arg, file);
 		char* const args[3] = {executee, file, 0};
 		execve(executee, args, envp);
 
 		perror("execute");
-		free(arg);
 		critical(0);
 	} else {    
 		// host
@@ -80,14 +60,6 @@ void launch(char* const executee, const char* path, char* const file) {
 	}
 }
 
-struct linux_dirent64 {
-	ino64_t d_ino;
-	off64_t d_off;
-	unsigned short d_reclen;
-	unsigned char d_type;
-	char d_name[];
-};
-
 int try_open(const char *file, int oflag) {
 	int fd = open(file, oflag);
 	if (fd == -1) {
@@ -96,39 +68,9 @@ int try_open(const char *file, int oflag) {
 	return fd;
 }
 
-struct string_t {
-	char* st;
-	int capacity;
-};
-
-enum instruction_code_t {
-	E_NAME,
-	G_SIZE,
-	E_SIZE,
-	L_SIZE,
-	N_LINK,
-	E_INUM,
-	EXEC,
-	UNKNOWN
-};
-
-union instruction_data_t {
-	size_t integer;
-	char* string;
-};
-
-struct instruction_t {
-	enum instruction_code_t instruction;
-	union instruction_data_t instruction_data;	
-};
-
 #define RETURN_FALSE_IF(condition) if (condition) { return false; }
 
-struct function_t {
-	size_t number;
-	struct instruction_t* instruction_sequence;
-};
-bool evaluate(struct function_t functor, const char* path, char* const name, ino64_t ino, size_t size, size_t nlink){
+boolean evaluate(struct function_t functor, char* const name, ino64_t ino, size_t size, size_t nlink){
 	for (int i = 0; i < functor.number; i++) {
 		size_t data = functor.instruction_sequence[i].instruction_data.integer;
 		char* string = functor.instruction_sequence[i].instruction_data.string;
@@ -140,7 +82,7 @@ bool evaluate(struct function_t functor, const char* path, char* const name, ino
 			case E_SIZE: RETURN_FALSE_IF(size != data)         break;
 			case L_SIZE: RETURN_FALSE_IF(size > data)          break;
 			case N_LINK: RETURN_FALSE_IF(nlink != data)        break;
-			case EXEC: launch(string, path, name);             break;
+			case EXEC: launch(string, name);                   break;
 			case UNKNOWN: critical("unknown instruction");
 		}
 	}
@@ -162,7 +104,7 @@ const char* get_type(char d_type) {
 
 #define BUF_SIZE 1024
 
-void directories_walk(struct string_t* cwd, struct function_t functor) {
+void directories_walk(struct string_t* cwd, struct checker_t functor) {
 	int nread;
 	char buf[BUF_SIZE];
 	struct linux_dirent64* d;
@@ -184,9 +126,10 @@ void directories_walk(struct string_t* cwd, struct function_t functor) {
 			if (d->d_type != DT_DIR) {
 				if (-1 == stat(d->d_name, &a_stat)) {
 					perror(d->d_name);
+					bpos += d->d_reclen;
 					continue;
 				}
-				if (evaluate(functor, cwd->st, d->d_name, d->d_ino, a_stat.st_size, a_stat.st_nlink)) {
+				if (functor.function(d->d_name, d->d_ino, a_stat.st_size, a_stat.st_nlink, launch)) {
 					printf("%8ld ", d->d_ino);
 					printf("%10s ", get_type(d->d_type));
 					printf("%s/%s\n", cwd->st, d->d_name);
@@ -234,9 +177,13 @@ enum instruction_code_t get_key(const char* key) {
 	if (0 == strcmp(key,  "=size")) return E_SIZE;
 	if (0 == strcmp(key,  "+size")) return G_SIZE;
 	if (0 == strcmp(key, "-nlink")) return N_LINK;
-	if (0 == strcmp(key,  "-size")) return L_SIZE;
+	if (0 == strcmp(key,  "-inum")) return E_INUM;
 	if (0 == strcmp(key,  "-exec")) return EXEC;
 	return UNKNOWN;
+}
+
+void temp(int a, int b, int c, int d, int e, int f) {
+
 }
 
 int main(int argc, char** argv, char* const* env) {
@@ -273,7 +220,7 @@ int main(int argc, char** argv, char* const* env) {
 
 	for (size_t index = 2; argv[index]; index++) {
 		enum instruction_code_t key = get_key(argv[index]);
-		bool is_numeral = (key != E_NAME) && (key != EXEC);
+		boolean is_numeral = (key != E_NAME) && (key != EXEC);
 		if (key == UNKNOWN) { critical(BAD_USAGE); }
 
 		index++;
@@ -299,9 +246,12 @@ int main(int argc, char** argv, char* const* env) {
 		perror(argv[1]);
 		critical("Bad root directory");
 	}
-	directories_walk(&cwd, functor);
+	struct checker_t checker;
+	checker = compileJIT(functor);
+	directories_walk(&cwd, checker);
 
 	free(cwd.st);
 	free(functor.instruction_sequence);
+	munmap(checker.function, checker.size);
 	return EXIT_SUCCESS;
 }
